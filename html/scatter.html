@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Visualization</title>
+    <link rel="stylesheet" href="scatter.css" charset="utf-8">
+  </head>
+  <body>
+    <h1 id="title"></h1>
+    <kbd id="sqlquery"></kbd>
+  <script>
+document.getElementById("title").innerHTML = window.location.search.substr(1);
+  </script>
+    <div id="scatter"></div>
+    <!-- <input type="button" name="xAxis" value="xAxis"> -->
+
+    <script src="d3.v3.js" charset="utf-8"></script>
+    <script src="d3.tip.v0.6.3.js"></script>
+    <script src="scatter.js" charset="utf-8"></script>
+  </body>
+
+</html>
