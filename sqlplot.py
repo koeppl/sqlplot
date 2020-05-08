@@ -96,16 +96,21 @@ def create_table(tablename, tablefilename):
 class ReadStatus(IntEnum):
 	NONE = auto()
 	MULTIPLOT = auto()
+	MACRO = auto()
 	ERASE = auto()
 
 
 def multiplot(sqlbuffer, multiplot_columns):
 	""" reads a MULTIPLOT statement and returns a dictionary mapping a MULTIPLOT instance to a list of coordinates """
-	# print(group_query)
+	for macroname in macros:
+		sqlbuffer = macros[macroname].apply(sqlbuffer)
+	print(sqlbuffer)
 	""" if a column is is `a`.`b`, then we have to alias it to `a.b` """
 	group_query = re.sub('MULTIPLOT', ','.join(map(lambda col: ".".join(map(lambda el: '"%s"' % el, col.split('.'))) + ' AS "%s"' % col, multiplot_columns)), sqlbuffer, 1)
 
 	group_query = re.sub('MULTIPLOT', ','.join(map(lambda col: '"%s"' % col, multiplot_columns)), group_query)
+
+
 	cursor.execute(group_query + ';')
 	multiplot_value_tuples=set()
 	# for row in cursor.fetchall():
@@ -209,8 +214,43 @@ conn.row_factory = sqlite3.Row
 conn.create_function("log", 2, lambda base,x: math.log(x, base))
 cursor = conn.cursor()
 
+class Macro:
+	def __init__(self, name, arguments, body):
+		self.name = name
+		self.arguments = arguments
+		self.body = body
+	def apply(self, s):
+		regex = '\$' + self.name + '\s*\(([^)]+)\)'
+		match = re.search(regex, s)
+		while match:
+			parameters = match.group(1).split(',')
+			assert len(parameters) == len(self.arguments), "length of arguments and parameters for macro %s mismatch: " % (self.name, parameters)
+			body = self.body
+			for rule in zip(self.arguments, parameters):
+				body = body.replace('$' + rule[0], rule[1])
+			s = re.sub(regex, s, body, 1)
+			match = re.search(regex, s)
+		return s
+
+macros=dict()
+
 with open(filename) as texfile:
 	for texLine in texfile.readlines():
+		if readstatus == ReadStatus.MACRO:
+			if texLine.startswith(filetype.comment()):
+				print(texLine, end='')
+				sqlbuffer+=' ' + texLine[len(filetype.comment()):].rstrip()
+				continue
+			readstatus = ReadStatus.NONE
+			match = re.match('\s*DEFINE\s+([a-zA-Z0-9]+)\s*\(([^)]+)\)\s*(.*)', sqlbuffer)
+			assert match, "no valid MACRO: " + sqlbuffer
+			name = match.group(1)
+			arguments = list(map(lambda x: x.strip(), match.group(2).split(',')))
+			body = match.group(3)
+			for argument in arguments:
+				assert body.find('$' + argument) != -1, "argument %s not found in body: %s" % (argument, body)
+			macros[name] = Macro(name, arguments, body)
+
 		if readstatus == ReadStatus.MULTIPLOT:
 			if texLine.startswith(filetype.comment()):
 				print(texLine, end='')
@@ -232,7 +272,7 @@ with open(filename) as texfile:
 				if 'type' in config_args:
 					outfiletype = Filetype.fromString(config_args['type'])
 				if 'file' in config_args:
-					outfile = open(config_args['file'], 'w')
+					outfile = open(config_args['file'], 'w' if not 'mode' in config_args else config_args['mode'])
 					print('\\input{%s}' % config_args['file'])
 				else:
 					outfile = sys.stdout
@@ -283,6 +323,18 @@ with open(filename) as texfile:
 			config_args=dict()
 			sqlbuffer = texLine[len(filetype.comment()):].rstrip()
 			readstatus = ReadStatus.MULTIPLOT
+
+		if texLine.startswith('%s DEFINE ' % filetype.comment()):
+			sqlbuffer = texLine[len(filetype.comment()):].rstrip()
+			readstatus = ReadStatus.MACRO
+
+		if texLine.startswith('%s UNDEF ' % filetype.comment()):
+			sqlbuffer = texLine[len(filetype.comment()):].strip()
+			match = re.match('UNDEF\s+([0-9a-zA-Z]+)\s*', sqlbuffer)
+			assert match, 'invalid UNDEF syntax : ' + sqlbuffer
+			name = match.group(1).strip()
+			assert name in macros, 'cannot UNDEF undefined macro: ' + name
+			del macros[name]
 
 		if texLine.startswith('%s IMPORT-DATA ' % filetype.comment()):
 			match = re.match('%s IMPORT-DATA ([^ ]+) (.+)' % filetype.comment(), texLine)
