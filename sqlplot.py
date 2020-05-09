@@ -102,8 +102,13 @@ class ReadStatus(IntEnum):
 
 def multiplot(sqlbuffer, multiplot_columns):
 	""" reads a MULTIPLOT statement and returns a dictionary mapping a MULTIPLOT instance to a list of coordinates """
-	for macroname in macros:
+	#TODO: change this for recursive substitutions!
+	match = re.search('\\$(\w+)', sqlbuffer)
+	while match:
+		macroname = match.group(1)
+		assert macroname in macros, 'macro not defined: "%s". used in the sql expression: %s' % (macroname, sqlbuffer)
 		sqlbuffer = macros[macroname].apply(sqlbuffer)
+		match = re.search('\\$(\w+)', sqlbuffer)
 	print(sqlbuffer)
 	""" if a column is is `a`.`b`, then we have to alias it to `a.b` """
 	group_query = re.sub('MULTIPLOT', ','.join(map(lambda col: ".".join(map(lambda el: '"%s"' % el, col.split('.'))) + ' AS "%s"' % col, multiplot_columns)), sqlbuffer, 1)
@@ -242,7 +247,7 @@ with open(filename) as texfile:
 				sqlbuffer+=' ' + texLine[len(filetype.comment()):].rstrip()
 				continue
 			readstatus = ReadStatus.NONE
-			match = re.match('\s*DEFINE\s+([a-zA-Z0-9]+)\s*\(([^)]+)\)\s*(.*)', sqlbuffer)
+			match = re.match('\s*DEFINE\s+(\w+)\s*\(([^)]+)\)\s*(.*)', sqlbuffer)
 			assert match, "no valid MACRO: " + sqlbuffer
 			name = match.group(1)
 			arguments = list(map(lambda x: x.strip(), match.group(2).split(',')))
@@ -330,7 +335,7 @@ with open(filename) as texfile:
 
 		if texLine.startswith('%s UNDEF ' % filetype.comment()):
 			sqlbuffer = texLine[len(filetype.comment()):].strip()
-			match = re.match('UNDEF\s+([0-9a-zA-Z]+)\s*', sqlbuffer)
+			match = re.match('UNDEF\s+(\w+)\s*', sqlbuffer)
 			assert match, 'invalid UNDEF syntax : ' + sqlbuffer
 			name = match.group(1).strip()
 			assert name in macros, 'cannot UNDEF undefined macro: ' + name
