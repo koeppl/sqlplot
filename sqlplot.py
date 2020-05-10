@@ -96,20 +96,25 @@ def create_table(tablename, tablefilename):
 class ReadStatus(IntEnum):
 	NONE = auto()
 	MULTIPLOT = auto()
+	TABULAR = auto()
 	MACRO = auto()
 	ERASE = auto()
 
 
-def multiplot(sqlbuffer, multiplot_columns):
-	""" reads a MULTIPLOT statement and returns a dictionary mapping a MULTIPLOT instance to a list of coordinates """
-	#TODO: change this for recursive substitutions!
+def apply_macros(sqlbuffer):
 	match = re.search('\\$(\w+)', sqlbuffer)
 	while match:
 		macroname = match.group(1)
 		assert macroname in macros, 'macro not defined: "%s". used in the sql expression: %s' % (macroname, sqlbuffer)
 		sqlbuffer = macros[macroname].apply(sqlbuffer)
 		match = re.search('\\$(\w+)', sqlbuffer)
-	print(sqlbuffer)
+	return sqlbuffer
+
+
+def multiplot(sqlbuffer, multiplot_columns):
+	""" reads a MULTIPLOT statement and returns a dictionary mapping a MULTIPLOT instance to a list of coordinates """
+	sqlbuffer = apply_macros(sqlbuffer)
+	#print(sqlbuffer)
 	""" if a column is is `a`.`b`, then we have to alias it to `a.b` """
 	group_query = re.sub('MULTIPLOT', ','.join(map(lambda col: ".".join(map(lambda el: '"%s"' % el, col.split('.'))) + ' AS "%s"' % col, multiplot_columns)), sqlbuffer, 1)
 
@@ -239,6 +244,12 @@ class Macro:
 
 macros=dict()
 
+def print_tablentry(entry):
+	typ = make_sqltype(entry)
+	if typ == sqltype.INTEGER or typ == sqltype.REAL:
+		return "\\num{%s}" % entry
+	return entry
+
 with open(filename) as texfile:
 	for texLine in texfile.readlines():
 		if readstatus == ReadStatus.MACRO:
@@ -256,7 +267,7 @@ with open(filename) as texfile:
 				assert body.find('$' + argument) != -1, "argument %s not found in body: %s" % (argument, body)
 			macros[name] = Macro(name, arguments, body)
 
-		if readstatus == ReadStatus.MULTIPLOT:
+		if readstatus == ReadStatus.MULTIPLOT or readstatus == ReadStatus.TABULAR:
 			if texLine.startswith(filetype.comment()):
 				print(texLine, end='')
 				if texLine.startswith('%s CONFIG' % filetype.comment()):
@@ -265,55 +276,73 @@ with open(filename) as texfile:
 					sqlbuffer+=' ' + texLine[len(filetype.comment()):].rstrip()
 				continue
 			else:
-				match = re.match('\s*MULTIPLOT\(([^)]+)\)', sqlbuffer)
-				assert match, "no multiplot argument given: " + sqlbuffer
-				multiplot_columns = match.group(1)
-				sqlbuffer_rest = sqlbuffer[match.span()[1]:] #remove 'MULTIPLOT(...) directive
-				coordinates = multiplot(sqlbuffer_rest, list(map(lambda col: col.strip(), multiplot_columns.split(','))))
-				# entrynames = list(map(lambda x: tuple(x), coordinates.keys()))
-				entrynames = list(coordinates.keys())
-				entrynames.sort()
-				outfiletype = filetype
-				if 'type' in config_args:
-					outfiletype = Filetype.fromString(config_args['type'])
-				if 'file' in config_args:
-					outfile = open(config_args['file'], 'w' if not 'mode' in config_args else config_args['mode'])
-					print('\\input{%s}' % config_args['file'])
-				else:
-					outfile = sys.stdout
+				if readstatus == ReadStatus.TABULAR:
+					readstatus = ReadStatus.ERASE
+					sqlbuffer = apply_macros(sqlbuffer[sqlbuffer.find('TABULAR')+len('TABULAR'):])
+					print(sqlbuffer)
+					cursor.execute(sqlbuffer + ';')
 
-				if outfiletype == Filetype.PYTHON:
-					pprint.pprint(coordinates, outfile)
-				if outfiletype == Filetype.CSV:
-					print('title,x,y', file=outfile)
-					for entry_id in range(len(entrynames)):
-						entryname = entrynames[entry_id]
-						for coordinate in coordinates[entryname]:
-							print('%s,%f,%f' % (entryname[0] if len(entryname) == 1 else str(entryname).replace(',',';'), coordinate[0], coordinate[1]), file=outfile)
-				elif outfiletype == Filetype.JS:
-					jsonoutput=dict()
-					jsonoutput['query'] = sqlbuffer
-					j=[]
-					for entry_id in range(len(entrynames)):
-						entryname = entrynames[entry_id]
-						for coordinate in coordinates[entryname]:
-							entry = dict()
-							entry['name'] = entryname
-							entry['x'] = coordinate[0]
-							entry['y'] = coordinate[1]
-							j.append(entry)
-					jsonoutput['result'] = j
-					json.dump(jsonoutput, outfile, indent=1)
-				else: # default: latex
-					for entry_id in range(len(entrynames)):
-						entry = entrynames[entry_id]
-						if entry not in color_entries:
-							color_entries[entry] = len(color_entries)+1
-						shift = color_entries[entry]-entry_id
-						print('\\pgfplotsset{cycle list shift=%d} %% %s' % (shift, str(color_entries[entry])), file=outfile)
-						print('\\addplot coordinates{%s};' % ' '.join(map(lambda coord: '(%f, %f)' % (coord[0], coord[1]), coordinates[entry])), file=outfile)
-						print('\\addlegendentry{%s};' % (str(entry) if len(entry) > 1 else entry[0]), file=outfile)
-				readstatus = ReadStatus.ERASE
+					if 'file' in config_args:
+						outfile = open(config_args['file'], 'w' if not 'mode' in config_args else config_args['mode'])
+						print('\\input{%s}' % config_args['file'])
+					else:
+						outfile = sys.stdout
+
+					for row in cursor.fetchall():
+						print(" & ".join(map(print_tablentry, row)) + ' \\\\', file=outfile)
+
+				else:
+					assert readstatus == ReadStatus.MULTIPLOT
+					readstatus = ReadStatus.ERASE
+					match = re.match('\s*MULTIPLOT\(([^)]+)\)', sqlbuffer)
+					assert match, "no multiplot argument given: " + sqlbuffer
+					multiplot_columns = match.group(1)
+					sqlbuffer_rest = sqlbuffer[match.span()[1]:] #remove 'MULTIPLOT(...) directive
+					coordinates = multiplot(sqlbuffer_rest, list(map(lambda col: col.strip(), multiplot_columns.split(','))))
+					# entrynames = list(map(lambda x: tuple(x), coordinates.keys()))
+					entrynames = list(coordinates.keys())
+					entrynames.sort()
+					outfiletype = filetype
+					if 'type' in config_args:
+						outfiletype = Filetype.fromString(config_args['type'])
+					if 'file' in config_args:
+						outfile = open(config_args['file'], 'w' if not 'mode' in config_args else config_args['mode'])
+						print('\\input{%s}' % config_args['file'])
+					else:
+						outfile = sys.stdout
+
+					if outfiletype == Filetype.PYTHON:
+						pprint.pprint(coordinates, outfile)
+					if outfiletype == Filetype.CSV:
+						print('title,x,y', file=outfile)
+						for entry_id in range(len(entrynames)):
+							entryname = entrynames[entry_id]
+							for coordinate in coordinates[entryname]:
+								print('%s,%f,%f' % (entryname[0] if len(entryname) == 1 else str(entryname).replace(',',';'), coordinate[0], coordinate[1]), file=outfile)
+					elif outfiletype == Filetype.JS:
+						jsonoutput=dict()
+						jsonoutput['query'] = sqlbuffer
+						j=[]
+						for entry_id in range(len(entrynames)):
+							entryname = entrynames[entry_id]
+							for coordinate in coordinates[entryname]:
+								entry = dict()
+								entry['name'] = entryname
+								entry['x'] = coordinate[0]
+								entry['y'] = coordinate[1]
+								j.append(entry)
+						jsonoutput['result'] = j
+						json.dump(jsonoutput, outfile, indent=1)
+					else: # default: latex
+						for entry_id in range(len(entrynames)):
+							entry = entrynames[entry_id]
+							if entry not in color_entries:
+								color_entries[entry] = len(color_entries)+1
+							shift = color_entries[entry]-entry_id
+							print('\\pgfplotsset{cycle list shift=%d} %% %s' % (shift, str(color_entries[entry])), file=outfile)
+							print('\\addplot coordinates{%s};' % ' '.join(map(lambda coord: '(%f, %f)' % (coord[0], coord[1]), coordinates[entry])), file=outfile)
+							print('\\addlegendentry{%s};' % (str(entry) if len(entry) > 1 else entry[0]), file=outfile)
+				#cleanup
 				if 'file' in config_args:
 					outfile.close()
 				config_args=dict()
@@ -328,6 +357,11 @@ with open(filename) as texfile:
 			config_args=dict()
 			sqlbuffer = texLine[len(filetype.comment()):].rstrip()
 			readstatus = ReadStatus.MULTIPLOT
+
+		if texLine.startswith('%s TABULAR' % filetype.comment()):
+			config_args=dict()
+			sqlbuffer = texLine[len(filetype.comment()):].rstrip()
+			readstatus = ReadStatus.TABULAR
 
 		if texLine.startswith('%s DEFINE ' % filetype.comment()):
 			sqlbuffer = texLine[len(filetype.comment()):].rstrip()
