@@ -135,13 +135,13 @@ def multiplot(sqlbuffer, multiplot_columns):
 		# print(query)
 		cursor.execute(query + ';')
 		rows = cursor.fetchall()
-		if(len(rows) > 0):
-			try:
-				list(map(lambda row: (float(row['x']), float(row['y'])), rows))
-			except TypeError:
-				die('Values of the MULTIPLOT tuple %s are not floats/not defined. SQL-Statement: %s ' % (str(multiplot_values),sqlbuffer) )
-
-			coordinates[multiplot_values] = list(map(lambda row: (row['x'], row['y']), rows))
+		#if(len(rows) > 0):
+			# try:
+			# 	list(map(lambda row: (float(row['x']), float(row['y'])), rows))
+			# except ValueError:
+			# 	die('Values of the MULTIPLOT tuple %s are not floats/not defined. SQL-Statement: %s ' % (str(multiplot_values),sqlbuffer) )
+            #
+		coordinates[multiplot_values] = list(map(lambda row: (row['x'], row['y']), rows))
 	return coordinates
 
 
@@ -238,7 +238,7 @@ class Macro:
 			body = self.body
 			for rule in zip(self.arguments, parameters):
 				body = body.replace('$' + rule[0], rule[1])
-			s = re.sub(regex, s, body, 1)
+			s = re.sub(regex, body, s, 1)
 			match = re.search(regex, s)
 		return s
 
@@ -303,6 +303,8 @@ with open(filename) as texfile:
 					entrynames = list(coordinates.keys())
 					entrynames.sort()
 					outfiletype = filetype
+					if not 'mode' in config_args or config_args['mode'].find('a') == -1: #if mode=a we use the previous_entries for the cycle list
+						previous_entries = 0
 					if 'type' in config_args:
 						outfiletype = Filetype.fromString(config_args['type'])
 					if 'file' in config_args:
@@ -334,21 +336,24 @@ with open(filename) as texfile:
 						jsonoutput['result'] = j
 						json.dump(jsonoutput, outfile, indent=1)
 					else: # default: latex
+
 						for entry_id in range(len(entrynames)):
 							entry = entrynames[entry_id]
-							if entry not in color_entries:
-								color_entries[entry] = len(color_entries)+1
-							shift = color_entries[entry]-entry_id
-							print('\\pgfplotsset{cycle list shift=%d} %% %s' % (shift, str(color_entries[entry])), file=outfile)
-							print('\\addplot coordinates{%s};' % ' '.join(map(lambda coord: '(%f, %f)' % (coord[0], coord[1]), coordinates[entry])), file=outfile)
+							if not 'colorcache' in config_args or config_args['colorcache'] != 'none':
+								if entry not in color_entries:
+									color_entries[entry] = len(color_entries)+1
+								shift = color_entries[entry]-(entry_id+previous_entries)
+								print('\\pgfplotsset{cycle list shift=%d} %% %s' % (shift, str(color_entries[entry])), file=outfile)
+							print('\\addplot coordinates{%s};' % ' '.join(map(lambda coord: '(%s, %s)' % (coord[0], coord[1]), coordinates[entry])), file=outfile)
 							print('\\addlegendentry{%s};' % (str(entry) if len(entry) > 1 else entry[0]), file=outfile)
+						previous_entries = len(entrynames) # number of previous entries -> needed for a subsequent plot call to determine the cycle list correctly
 				#cleanup
 				if 'file' in config_args:
 					outfile.close()
 				config_args=dict()
 
 		if readstatus == ReadStatus.ERASE:
-			if len(texLine.strip()) == 0:
+			if len(texLine.strip()) == 0 or texLine.startswith(filetype.comment()):
 				readstatus = ReadStatus.NONE
 			else:
 				continue

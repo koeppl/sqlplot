@@ -34,6 +34,7 @@ The valid keys are:
  - file: write the output in a separate file instead of directly to stdout
  - type: use a different file type than the type of the file we are currently parsing
  - mode: either 'w' for overwriting or 'a' for appending. Appending is useful if you have several SQL commands that generate data for a single plot
+ - colorcache=none: do not use the cached scheme written in `pgf_color_entries.txt`
 
 
 ```
