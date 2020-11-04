@@ -96,10 +96,17 @@ def create_table(tablename, tablefilename):
 class ReadStatus(IntEnum):
 	NONE = auto()
 	MULTIPLOT = auto()
+	SINGLEPLOT = auto()
 	TABULAR = auto()
 	MACRO = auto()
-	ERASE = auto()
+	ERASE = auto() #! used for updating a document in-place by removing the old insertions (which is done until finding a newline)
 
+keyword_to_status = {
+		"MULTIPLOT"  : ReadStatus.MULTIPLOT,
+		"SINGLEPLOT" : ReadStatus.SINGLEPLOT,
+		"TABULAR"    : ReadStatus.TABULAR,
+		"DEFINE"     : ReadStatus.MACRO
+		}
 
 def apply_macros(sqlbuffer):
 	match = re.search('\\$(\w+)', sqlbuffer)
@@ -120,7 +127,8 @@ def multiplot(sqlbuffer, multiplot_columns):
 
 	group_query = re.sub('MULTIPLOT', ','.join(map(lambda col: '"%s"' % col, multiplot_columns)), group_query)
 
-
+	""" query for all possible values the variable MULTIPLOT can have """
+	print("% group query: {}", sqlbuffer)
 	cursor.execute(group_query + ';')
 	multiplot_value_tuples=set()
 	# for row in cursor.fetchall():
@@ -129,10 +137,16 @@ def multiplot(sqlbuffer, multiplot_columns):
 	multiplot_value_tuples = list(map(lambda row: tuple(row[x] for x in multiplot_columns), cursor.fetchall()))
 	coordinates=dict()
 	for multiplot_values in multiplot_value_tuples: 
-		query = re.sub(' WHERE ', ' WHERE %s AND ' % 
-				' AND '.join(map(lambda x: '"%s" = \'%s\'' % (x[0],x[1]), zip(multiplot_columns, multiplot_values)))
-				, group_query)
-		# print(query)
+		#! this is a heuristic: we assume that if there is a where clause than this is for the outmost select command (and not for a subquery)
+		if re.search(' where ', group_query, re.IGNORECASE):
+			query = re.sub('(.*) where ', '\\1 WHERE %s AND ' % 
+					' AND '.join(map(lambda x: '"%s" = \'%s\'' % (x[0],x[1]), zip(multiplot_columns, multiplot_values)))
+					, group_query, flags=re.IGNORECASE)
+		else:
+			query = re.sub('(.*) group by ', '\\1 WHERE %s GROUP BY ' % 
+					' AND '.join(map(lambda x: '"%s" = \'%s\'' % (x[0],x[1]), zip(multiplot_columns, multiplot_values)))
+					, group_query, flags=re.IGNORECASE)
+		#print(query)
 		cursor.execute(query + ';')
 		rows = cursor.fetchall()
 		#if(len(rows) > 0):
@@ -158,8 +172,12 @@ try:
 			cols = line.split("\t")
 			assert len(cols) == 2, "Invalid Line : " + line
 			if len(cols) == 2: 
-				color_entries[literal_eval(cols[0])] = int(cols[1]) 
-				""" we use literal_eval to deserialize a tuple as keys are tuples """
+				try:
+					color_entries[literal_eval(cols[0])] = int(cols[1]) 
+					""" we use literal_eval to deserialize a tuple as keys are tuples """
+				except ValueError:
+					print('could not parse the line `%s` in pgf_color_entries.txt' % line)
+					sys.exit(1)
 			
 except IOError:
 	print('file pgf_color_entries.txt does not exist -> will create it.', file=sys.stderr)
@@ -244,6 +262,48 @@ class Macro:
 
 macros=dict()
 
+""" writes the output of MULTIPLOT or SINGLEPLOT, where coordinates is a dict mapping an entryname to a list of coordinates """
+def plot_coordinates(coordinates, outfile, outfiletype, previous_entries):
+	# entrynames = list(map(lambda x: tuple(x), coordinates.keys()))
+	entrynames = list(coordinates.keys())
+	entrynames.sort()
+
+	if outfiletype == Filetype.PYTHON:
+		pprint.pprint(coordinates, outfile)
+	if outfiletype == Filetype.CSV:
+		print('title,x,y', file=outfile)
+		for entry_id in range(len(entrynames)):
+			entryname = entrynames[entry_id]
+			for coordinate in coordinates[entryname]:
+				print('%s,%f,%f' % (entryname[0] if len(entryname) == 1 else str(entryname).replace(',',';'), coordinate[0], coordinate[1]), file=outfile)
+	elif outfiletype == Filetype.JS:
+		jsonoutput=dict()
+		jsonoutput['query'] = sqlbuffer
+		j=[]
+		for entry_id in range(len(entrynames)):
+			entryname = entrynames[entry_id]
+			for coordinate in coordinates[entryname]:
+				entry = dict()
+				entry['name'] = entryname
+				entry['x'] = coordinate[0]
+				entry['y'] = coordinate[1]
+				j.append(entry)
+		jsonoutput['result'] = j
+		json.dump(jsonoutput, outfile, indent=1)
+	else: # default: latex
+
+		for entry_id in range(len(entrynames)):
+			entry = entrynames[entry_id]
+			if not 'colorcache' in config_args or config_args['colorcache'] != 'none':
+				if entry not in color_entries:
+					color_entries[entry] = len(color_entries)+1
+				shift = color_entries[entry]-(entry_id+previous_entries)
+				print('\\pgfplotsset{cycle list shift=%d} %% %s' % (shift, str(color_entries[entry])), file=outfile)
+			print('\\addplot coordinates{%s};' % ' '.join(map(lambda coord: '(%s, %s)' % (coord[0], coord[1]), coordinates[entry])), file=outfile)
+			print('\\addlegendentry{%s};' % (str(entry) if len(entry) > 1 else entry[0]), file=outfile)
+		previous_entries = previous_entries + len(entrynames) # number of previous entries -> needed for a subsequent plot call to determine the cycle list correctly
+
+
 def print_tablentry(entry):
 	typ = make_sqltype(entry)
 	if typ == sqltype.INTEGER or typ == sqltype.REAL:
@@ -267,7 +327,7 @@ with open(filename) as texfile:
 				assert body.find('$' + argument) != -1, "argument %s not found in body: %s" % (argument, body)
 			macros[name] = Macro(name, arguments, body)
 
-		if readstatus == ReadStatus.MULTIPLOT or readstatus == ReadStatus.TABULAR:
+		if readstatus in [ReadStatus.MULTIPLOT, ReadStatus.TABULAR, ReadStatus.SINGLEPLOT]:
 			if texLine.startswith(filetype.comment()):
 				print(texLine, end='')
 				if texLine.startswith('%s CONFIG' % filetype.comment()):
@@ -276,10 +336,23 @@ with open(filename) as texfile:
 					sqlbuffer+=' ' + texLine[len(filetype.comment()):].rstrip()
 				continue
 			else:
+				if readstatus in [ReadStatus.MULTIPLOT, ReadStatus.SINGLEPLOT]:
+					outfiletype = filetype
+					""" if mode=a we use the previous_entries for the cycle list """
+					if not 'mode' in config_args or config_args['mode'].find('a') == -1: 
+						previous_entries = 0
+					if 'type' in config_args:
+						outfiletype = Filetype.fromString(config_args['type'])
+					if 'file' in config_args:
+						outfile = open(config_args['file'], 'w' if not 'mode' in config_args else config_args['mode'])
+						print('\\input{%s}' % config_args['file'])
+					else:
+						outfile = sys.stdout
+
 				if readstatus == ReadStatus.TABULAR:
 					readstatus = ReadStatus.ERASE
 					sqlbuffer = apply_macros(sqlbuffer[sqlbuffer.find('TABULAR')+len('TABULAR'):])
-					print(sqlbuffer)
+#					print(sqlbuffer)
 					cursor.execute(sqlbuffer + ';')
 
 					if 'file' in config_args:
@@ -290,7 +363,18 @@ with open(filename) as texfile:
 
 					for row in cursor.fetchall():
 						print(" & ".join(map(print_tablentry, row)) + ' \\\\', file=outfile)
-
+				if readstatus == ReadStatus.SINGLEPLOT:
+					readstatus = ReadStatus.ERASE
+					match = re.match('\s*SINGLEPLOT\(([^)]+)\)', sqlbuffer)
+					assert match, "no singleplot argument given: " + sqlbuffer
+					singleplot_name = match.group(1)
+					sqlbuffer = sqlbuffer[match.span()[1]:] #remove 'MULTIPLOT(...) directive
+					print("% execute : ", sqlbuffer)
+					cursor.execute(sqlbuffer + ';')
+					rows = cursor.fetchall()
+					coordinates=dict()
+					coordinates[(singleplot_name,)] = list(map(lambda row: (row['x'], row['y']), rows))
+					plot_coordinates(coordinates, outfile, outfiletype, previous_entries)
 				else:
 					assert readstatus == ReadStatus.MULTIPLOT
 					readstatus = ReadStatus.ERASE
@@ -299,54 +383,7 @@ with open(filename) as texfile:
 					multiplot_columns = match.group(1)
 					sqlbuffer_rest = sqlbuffer[match.span()[1]:] #remove 'MULTIPLOT(...) directive
 					coordinates = multiplot(sqlbuffer_rest, list(map(lambda col: col.strip(), multiplot_columns.split(','))))
-					# entrynames = list(map(lambda x: tuple(x), coordinates.keys()))
-					entrynames = list(coordinates.keys())
-					entrynames.sort()
-					outfiletype = filetype
-					if not 'mode' in config_args or config_args['mode'].find('a') == -1: #if mode=a we use the previous_entries for the cycle list
-						previous_entries = 0
-					if 'type' in config_args:
-						outfiletype = Filetype.fromString(config_args['type'])
-					if 'file' in config_args:
-						outfile = open(config_args['file'], 'w' if not 'mode' in config_args else config_args['mode'])
-						print('\\input{%s}' % config_args['file'])
-					else:
-						outfile = sys.stdout
-
-					if outfiletype == Filetype.PYTHON:
-						pprint.pprint(coordinates, outfile)
-					if outfiletype == Filetype.CSV:
-						print('title,x,y', file=outfile)
-						for entry_id in range(len(entrynames)):
-							entryname = entrynames[entry_id]
-							for coordinate in coordinates[entryname]:
-								print('%s,%f,%f' % (entryname[0] if len(entryname) == 1 else str(entryname).replace(',',';'), coordinate[0], coordinate[1]), file=outfile)
-					elif outfiletype == Filetype.JS:
-						jsonoutput=dict()
-						jsonoutput['query'] = sqlbuffer
-						j=[]
-						for entry_id in range(len(entrynames)):
-							entryname = entrynames[entry_id]
-							for coordinate in coordinates[entryname]:
-								entry = dict()
-								entry['name'] = entryname
-								entry['x'] = coordinate[0]
-								entry['y'] = coordinate[1]
-								j.append(entry)
-						jsonoutput['result'] = j
-						json.dump(jsonoutput, outfile, indent=1)
-					else: # default: latex
-
-						for entry_id in range(len(entrynames)):
-							entry = entrynames[entry_id]
-							if not 'colorcache' in config_args or config_args['colorcache'] != 'none':
-								if entry not in color_entries:
-									color_entries[entry] = len(color_entries)+1
-								shift = color_entries[entry]-(entry_id+previous_entries)
-								print('\\pgfplotsset{cycle list shift=%d} %% %s' % (shift, str(color_entries[entry])), file=outfile)
-							print('\\addplot coordinates{%s};' % ' '.join(map(lambda coord: '(%s, %s)' % (coord[0], coord[1]), coordinates[entry])), file=outfile)
-							print('\\addlegendentry{%s};' % (str(entry) if len(entry) > 1 else entry[0]), file=outfile)
-						previous_entries = len(entrynames) # number of previous entries -> needed for a subsequent plot call to determine the cycle list correctly
+					plot_coordinates(coordinates, outfile, outfiletype, previous_entries)
 				#cleanup
 				if 'file' in config_args:
 					outfile.close()
@@ -358,19 +395,13 @@ with open(filename) as texfile:
 			else:
 				continue
 
-		if texLine.startswith('%s MULTIPLOT' % filetype.comment()):
-			config_args=dict()
-			sqlbuffer = texLine[len(filetype.comment()):].rstrip()
-			readstatus = ReadStatus.MULTIPLOT
-
-		if texLine.startswith('%s TABULAR' % filetype.comment()):
-			config_args=dict()
-			sqlbuffer = texLine[len(filetype.comment()):].rstrip()
-			readstatus = ReadStatus.TABULAR
-
-		if texLine.startswith('%s DEFINE ' % filetype.comment()):
-			sqlbuffer = texLine[len(filetype.comment()):].rstrip()
-			readstatus = ReadStatus.MACRO
+		#! check for a multiline command stored in keyword_to_status
+		for key in keyword_to_status:
+			if texLine.startswith('%s %s' % (filetype.comment(), key) ):
+				config_args=dict()
+				sqlbuffer = texLine[len(filetype.comment()):].rstrip()
+				readstatus = keyword_to_status[key]
+				break
 
 		if texLine.startswith('%s UNDEF ' % filetype.comment()):
 			sqlbuffer = texLine[len(filetype.comment()):].strip()
@@ -380,6 +411,7 @@ with open(filename) as texfile:
 			assert name in macros, 'cannot UNDEF undefined macro: ' + name
 			del macros[name]
 
+		#! read a log file with '^RESULT .*' statements into a sql table
 		if texLine.startswith('%s IMPORT-DATA ' % filetype.comment()):
 			match = re.match('%s IMPORT-DATA ([^ ]+) (.+)' % filetype.comment(), texLine)
 			assert match, 'invalid texLine ' + texLine
