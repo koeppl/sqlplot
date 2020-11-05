@@ -76,14 +76,14 @@ def create_table(tablename, tablefilename):
 	columns=[]
 	for key in keys:
 		columns.append('"%s" %s' % (key, str(keys[key])))
-	cursor.execute('CREATE TABLE "%s" (%s);' % (tablename, ', '.join(columns)))
+	sqlexecute('CREATE TABLE "%s" (%s);' % (tablename, ', '.join(columns)))
 
 	# read the values
 	with open(tablefilename, 'r') as tablefile:
 		for tableLine in tablefile.readlines():
 			if tableLine.startswith('RESULT '):
 				attrs = split_resultline(tableLine)
-				cursor.execute('INSERT INTO "%s" (%s) VALUES (%s);' % (tablename
+				sqlexecute('INSERT INTO "%s" (%s) VALUES (%s);' % (tablename
 					, ', '.join(map(lambda key : '"' + key + '"' , attrs.keys()))
 					, ', '.join(map(lambda value : '\'' + value + '\'', attrs.values()))))
 				# 	if value:
@@ -121,15 +121,15 @@ def apply_macros(sqlbuffer):
 def multiplot(sqlbuffer, multiplot_columns):
 	""" reads a MULTIPLOT statement and returns a dictionary mapping a MULTIPLOT instance to a list of coordinates """
 	sqlbuffer = apply_macros(sqlbuffer)
-	#print(sqlbuffer)
+	logging.info("macros-expanded SQL : " + sqlbuffer);
+
 	""" if a column is is `a`.`b`, then we have to alias it to `a.b` """
 	group_query = re.sub('MULTIPLOT', ','.join(map(lambda col: ".".join(map(lambda el: '"%s"' % el, col.split('.'))) + ' AS "%s"' % col, multiplot_columns)), sqlbuffer, 1)
 
 	group_query = re.sub('MULTIPLOT', ','.join(map(lambda col: '"%s"' % col, multiplot_columns)), group_query)
 
 	""" query for all possible values the variable MULTIPLOT can have """
-	print("% group query: {}", sqlbuffer)
-	cursor.execute(group_query + ';')
+	sqlexecute(group_query + ';')
 	multiplot_value_tuples=set()
 	# for row in cursor.fetchall():
 	# 	multiplot_value_tuples.add(tuple(row[x] for x in multiplot_columns))
@@ -146,8 +146,7 @@ def multiplot(sqlbuffer, multiplot_columns):
 			query = re.sub('(.*) group by ', '\\1 WHERE %s GROUP BY ' % 
 					' AND '.join(map(lambda x: '"%s" = \'%s\'' % (x[0],x[1]), zip(multiplot_columns, multiplot_values)))
 					, group_query, flags=re.IGNORECASE)
-		#print(query)
-		cursor.execute(query + ';')
+		sqlexecute(query + ';')
 		rows = cursor.fetchall()
 		#if(len(rows) > 0):
 			# try:
@@ -176,7 +175,7 @@ try:
 					color_entries[literal_eval(cols[0])] = int(cols[1]) 
 					""" we use literal_eval to deserialize a tuple as keys are tuples """
 				except ValueError:
-					print('could not parse the line `%s` in pgf_color_entries.txt' % line)
+					print('could not parse the line `%s` in pgf_color_entries.txt' % line, file=sys.stderr)
 					sys.exit(1)
 			
 except IOError:
@@ -208,16 +207,26 @@ class Filetype(IntEnum):
 			return Filetype.PYTHON
 
 databasename=':memory:'
+loging_level_parameter='warning'
 try:
-	opts, args = getopt.getopt(sys.argv[1:],"D::",["database="])
+	opts, args = getopt.getopt(sys.argv[1:],"D:l::",["database=","log="])
 except getopt.GetoptError:
-	print (sys.argv[0] + ' -D <databasename> <infile>')
+	print (sys.argv[0] + ' -D <databasename> -l <logginglevel> <infile>')
 	sys.exit(2)
 for opt, arg in opts:
-	if opt in ('-D', 'database'):
+	if opt in ('-D', '--database'):
 		databasename = arg
+	if opt in ('-l', '--log'):
+		loging_level_parameter = arg
 	# else:
 	# 	filename = arg
+
+logging_level = getattr(logging, loging_level_parameter.upper(), None)
+if not isinstance(logging_level, int):
+    raise ValueError('Invalid log level: %s' % loging_level_parameter)
+logging.basicConfig(level=logging_level)
+
+
 
 filename = args[0]
 filetype = Filetype.TEX
@@ -236,11 +245,23 @@ elif filename.endswith('.js'):
 elif filename.endswith('.csv'):
 	filetype = Filetype.CSV
 
+
 conn = sqlite3.connect(databasename)
-conn.set_trace_callback(print)
+if logging_level <= logging.DEBUG:
+	sqlite3.enable_callback_tracebacks(True)
+	conn.set_trace_callback(print)
 conn.row_factory = sqlite3.Row
 conn.create_function("log", 2, lambda base,x: math.log(x, base))
 cursor = conn.cursor()
+
+
+def sqlexecute(sqlcommand):
+	try:
+#		logging.info("SQL query: " + sqlbuffer);
+		cursor.execute(sqlcommand)
+	except sqlite3.Error as e:
+		print("Error while executing the SQL statement: ", sqlcommand, file=sys.stderr)
+		raise e
 
 class Macro:
 	def __init__(self, name, arguments, body):
@@ -352,8 +373,7 @@ with open(filename) as texfile:
 				if readstatus == ReadStatus.TABULAR:
 					readstatus = ReadStatus.ERASE
 					sqlbuffer = apply_macros(sqlbuffer[sqlbuffer.find('TABULAR')+len('TABULAR'):])
-#					print(sqlbuffer)
-					cursor.execute(sqlbuffer + ';')
+					sqlexecute(sqlbuffer + ';')
 
 					if 'file' in config_args:
 						outfile = open(config_args['file'], 'w' if not 'mode' in config_args else config_args['mode'])
@@ -369,8 +389,7 @@ with open(filename) as texfile:
 					assert match, "no singleplot argument given: " + sqlbuffer
 					singleplot_name = match.group(1)
 					sqlbuffer = sqlbuffer[match.span()[1]:] #remove 'MULTIPLOT(...) directive
-					print("% execute : ", sqlbuffer)
-					cursor.execute(sqlbuffer + ';')
+					sqlexecute(sqlbuffer + ';')
 					rows = cursor.fetchall()
 					coordinates=dict()
 					coordinates[(singleplot_name,)] = list(map(lambda row: (row['x'], row['y']), rows))
