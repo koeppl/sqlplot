@@ -323,6 +323,7 @@ def plot_coordinates(coordinates, outfile, outfiletype, previous_entries):
 			print('\\addplot coordinates{%s};' % ' '.join(map(lambda coord: '(%s, %s)' % (coord[0], coord[1]), coordinates[entry])), file=outfile)
 			print('\\addlegendentry{%s};' % (str(entry) if len(entry) > 1 else entry[0]), file=outfile)
 		previous_entries = previous_entries + len(entrynames) # number of previous entries -> needed for a subsequent plot call to determine the cycle list correctly
+	return previous_entries
 
 
 def print_tablentry(entry):
@@ -383,7 +384,7 @@ with open(filename) as texfile:
 
 					for row in cursor.fetchall():
 						print(" & ".join(map(print_tablentry, row)) + ' \\\\', file=outfile)
-				if readstatus == ReadStatus.SINGLEPLOT:
+				elif readstatus == ReadStatus.SINGLEPLOT:
 					readstatus = ReadStatus.ERASE
 					match = re.match('\s*SINGLEPLOT\(([^)]+)\)', sqlbuffer)
 					assert match, "no singleplot argument given: " + sqlbuffer
@@ -393,7 +394,7 @@ with open(filename) as texfile:
 					rows = cursor.fetchall()
 					coordinates=dict()
 					coordinates[(singleplot_name,)] = list(map(lambda row: (row['x'], row['y']), rows))
-					plot_coordinates(coordinates, outfile, outfiletype, previous_entries)
+					previous_entries = plot_coordinates(coordinates, outfile, outfiletype, previous_entries)
 				else:
 					assert readstatus == ReadStatus.MULTIPLOT
 					readstatus = ReadStatus.ERASE
@@ -402,7 +403,7 @@ with open(filename) as texfile:
 					multiplot_columns = match.group(1)
 					sqlbuffer_rest = sqlbuffer[match.span()[1]:] #remove 'MULTIPLOT(...) directive
 					coordinates = multiplot(sqlbuffer_rest, list(map(lambda col: col.strip(), multiplot_columns.split(','))))
-					plot_coordinates(coordinates, outfile, outfiletype, previous_entries)
+					previous_entries = plot_coordinates(coordinates, outfile, outfiletype, previous_entries)
 				#cleanup
 				if 'file' in config_args:
 					outfile.close()
