@@ -98,6 +98,7 @@ class ReadStatus(IntEnum):
 	MULTIPLOT = auto()
 	SINGLEPLOT = auto()
 	TABULAR = auto()
+	MATRIX = auto()
 	MACRO = auto()
 	ERASE = auto() #! used for updating a document in-place by removing the old insertions (which is done until finding a newline)
 
@@ -105,6 +106,7 @@ keyword_to_status = {
 		"MULTIPLOT"  : ReadStatus.MULTIPLOT,
 		"SINGLEPLOT" : ReadStatus.SINGLEPLOT,
 		"TABULAR"    : ReadStatus.TABULAR,
+		"MATRIX"     : ReadStatus.MATRIX,
 		"DEFINE"     : ReadStatus.MACRO
 		}
 
@@ -349,7 +351,7 @@ with open(filename) as texfile:
 				assert body.find('$' + argument) != -1, "argument %s not found in body: %s" % (argument, body)
 			macros[name] = Macro(name, arguments, body)
 
-		if readstatus in [ReadStatus.MULTIPLOT, ReadStatus.TABULAR, ReadStatus.SINGLEPLOT]:
+		if readstatus in [ReadStatus.MULTIPLOT, ReadStatus.TABULAR, ReadStatus.SINGLEPLOT, ReadStatus.MATRIX]:
 			if texLine.startswith(filetype.comment()):
 				print(texLine, end='')
 				if texLine.startswith('%s CONFIG' % filetype.comment()):
@@ -395,6 +397,28 @@ with open(filename) as texfile:
 					coordinates=dict()
 					coordinates[(singleplot_name,)] = list(map(lambda row: (row['x'], row['y']), rows))
 					previous_entries = plot_coordinates(coordinates, outfile, outfiletype, previous_entries)
+				elif readstatus == ReadStatus.MATRIX:
+					readstatus = ReadStatus.ERASE
+					sqlbuffer = apply_macros(sqlbuffer[sqlbuffer.find('MATRIX')+len('MATRIX'):])
+					sqlexecute(sqlbuffer + ';')
+
+					if 'file' in config_args:
+						outfile = open(config_args['file'], 'w' if not 'mode' in config_args else config_args['mode'])
+						print('\\input{%s}' % config_args['file'])
+					else:
+						outfile = sys.stdout
+					
+					column_names=set()
+					row_names=set()
+					matrix=dict()
+					for row in cursor.fetchall():
+						print(row)
+						column_names.add(row['x'])
+						row_names.add(row['y'])
+						matrix[(row['x'], row['y'])] = row['val']
+					print(" & ".join(map(str, column_names)) + ' \\\\', file=outfile)
+					for row in row_names:
+						print(row + " & " + " & ".join(map(print_tablentry, map(lambda x: matrix[(x, row)], column_names))) + ' \\\\', file=outfile)
 				else:
 					assert readstatus == ReadStatus.MULTIPLOT
 					readstatus = ReadStatus.ERASE

@@ -44,6 +44,20 @@ Instead of a multiplot, we plot only a single dataset whose name string we set a
 The rest is exacly as `MULTIPLOT` but a regular SQL command (i.e., without `MULTIPLOT` in the SQL body).
 The idea of this command is to supplement a `MULTIPLOT` command from another table that may only contain the benchmarks of a single instance.
 
+```
+%% MATRIX SELECT-STATEMENT containing columns `x`, `y` and `val`
+```
+create a tabular with the `x` attribute as columns, `y` attribute as rows and `val` as matrix entries.
+Example:
+```
+%% MATRIX
+%% SELECT 
+%% "\num{" || prefix || "}" AS x,
+%% "\texttt{" || file  || "}" AS y,
+%% printf("%.2f", time) AS val
+%% FROM stats
+```
+
 
 ```
 %% DEFINE macro(arg1,arg2,...) {body $arg1 ... $arg2 ...} 
