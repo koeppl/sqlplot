@@ -189,10 +189,11 @@ class Filetype(IntEnum):
 	PYTHON = auto()
 	JS = auto()
 	CSV = auto()
+	GNUPLOT = auto()
 	def comment(self):
 		if(self == Filetype.CSV):
 			return '##'
-		if(self == Filetype.PYTHON):
+		if(self == Filetype.PYTHON or self == Filetype.GNUPLOT):
 			return '##'
 		if(self == Filetype.JS):
 			return '///'
@@ -207,6 +208,8 @@ class Filetype(IntEnum):
 			return Filetype.JS
 		if(str == 'py'):
 			return Filetype.PYTHON
+		if(str == 'plt'):
+			return Filetype.GNUPLOT
 
 databasename=':memory:'
 loging_level_parameter='warning'
@@ -238,10 +241,11 @@ sqlbuffer = ''
 
 
 
-
 assert os.access(filename, os.R_OK), 'cannot read file %s' % filename
 if filename.endswith('.py'):
 	filetype = Filetype.PYTHON
+elif filename.endswith('.plt'):
+	filetype = Filetype.GNUPLOT
 elif filename.endswith('.js'):
 	filetype = Filetype.JS
 elif filename.endswith('.csv'):
@@ -285,15 +289,42 @@ class Macro:
 
 macros=dict()
 
+""" storing the last index of the written gnuplot data for each file """
+gnuplot_line_index = dict()
+
 """ writes the output of MULTIPLOT or SINGLEPLOT, where coordinates is a dict mapping an entryname to a list of coordinates """
-def plot_coordinates(coordinates, outfile, outfiletype, previous_entries):
+def plot_coordinates(sqlbuffer, outfilename, coordinates, outfile, outfiletype, previous_entries):
 	# entrynames = list(map(lambda x: tuple(x), coordinates.keys()))
 	entrynames = list(coordinates.keys())
 	entrynames.sort()
+	sqlbuffer = sqlbuffer.replace('\n', ' ')
 
 	if outfiletype == Filetype.PYTHON:
 		pprint.pprint(coordinates, outfile)
-	if outfiletype == Filetype.CSV:
+	elif outfiletype == Filetype.GNUPLOT:
+		if outfilename not in gnuplot_line_index:
+			gnuplot_line_index[outfilename] = 0
+		print('# ' + sqlbuffer, file=outfile)
+		print('', file=outfile)
+		for entry_id in range(len(entrynames)):
+			entryname = entrynames[entry_id]
+			print('#index %d with parameter %s' % (gnuplot_line_index[outfilename], entryname[0] if len(entryname) == 1 else str(entryname).replace(',',';')), file=outfile)
+			for coordinate in coordinates[entryname]:
+				print('%s\t%s' % (coordinate[0], coordinate[1]), file=outfile)
+			print('', file=outfile)
+			gnuplot_line_index[outfilename] += 1
+			
+		print('# plot \\', file=outfile)
+		for entry_id in range(len(entrynames)):
+			entryname = entrynames[entry_id]
+			index = gnuplot_line_index[outfilename] - len(entrynames) + entry_id
+			title = entryname[0] if len(entryname) == 1 else str(entryname).replace(',',';')
+			print('# \'%s\' index %d title "%s" with linespoints ls %d, \\' % (outfilename, index, title, index), file=outfile)
+		print('# ', file=outfile)
+		print('\n', file=outfile)
+
+
+	elif outfiletype == Filetype.CSV:
 		print('title,x,y', file=outfile)
 		for entry_id in range(len(entrynames)):
 			entryname = entrynames[entry_id]
@@ -314,6 +345,8 @@ def plot_coordinates(coordinates, outfile, outfiletype, previous_entries):
 		jsonoutput['result'] = j
 		json.dump(jsonoutput, outfile, indent=1)
 	else: # default: latex
+		if outfilename != None:
+			print('% ' + sqlbuffer, file=outfile)
 
 		for entry_id in range(len(entrynames)):
 			entry = entrynames[entry_id]
@@ -368,10 +401,17 @@ with open(filename) as texfile:
 					if 'type' in config_args:
 						outfiletype = Filetype.fromString(config_args['type'])
 					if 'file' in config_args:
+						if outfiletype == Filetype.GNUPLOT:
+							assert ('mode' in config_args and config_args['mode'].find('a') != -1) or config_args['file'] not in gnuplot_line_index, 'overwriting a .dat file created within this execution without append mode is prohibited'
 						outfile = open(config_args['file'], 'w' if not 'mode' in config_args else config_args['mode'])
-						print('\\input{%s}' % config_args['file'])
+						if outfiletype == Filetype.TEX: 
+							print('\\input{%s}' % config_args['file'])
+						elif outfiletype == Filetype.PYTHON:
+							print('# read comments in file %s for the plot command' % config_args['file'])
+							
 					else:
 						outfile = sys.stdout
+						assert outfiletype != Filetype.GNUPLOT, "need CONFIG file={outfile} parameter to know where to write the data"
 					try:
 						previous_entries
 					except NameError:
@@ -401,7 +441,7 @@ with open(filename) as texfile:
 					rows = cursor.fetchall()
 					coordinates=dict()
 					coordinates[(singleplot_name,)] = list(map(lambda row: (row['x'], row['y']), rows))
-					previous_entries = plot_coordinates(coordinates, outfile, outfiletype, previous_entries)
+					previous_entries = plot_coordinates(sqlbuffer, config_args['file'] if 'file' in config_args else None, coordinates, outfile, outfiletype, previous_entries)
 				elif readstatus == ReadStatus.MATRIX:
 					readstatus = ReadStatus.ERASE
 					sqlbuffer = apply_macros(sqlbuffer[sqlbuffer.find('MATRIX')+len('MATRIX'):])
@@ -432,7 +472,7 @@ with open(filename) as texfile:
 					multiplot_columns = match.group(1)
 					sqlbuffer_rest = sqlbuffer[match.span()[1]:] #remove 'MULTIPLOT(...) directive
 					coordinates = multiplot(sqlbuffer_rest, list(map(lambda col: col.strip(), multiplot_columns.split(','))))
-					previous_entries = plot_coordinates(coordinates, outfile, outfiletype, previous_entries)
+					previous_entries = plot_coordinates(sqlbuffer, config_args['file'] if 'file' in config_args else None, coordinates, outfile, outfiletype, previous_entries)
 				#cleanup
 				if 'file' in config_args:
 					outfile.close()
