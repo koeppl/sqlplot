@@ -372,6 +372,11 @@ with open(filename) as texfile:
 						print('\\input{%s}' % config_args['file'])
 					else:
 						outfile = sys.stdout
+					try:
+						previous_entries
+					except NameError:
+						die('mode is set to append, but there is no previous content!')
+						
 
 				if readstatus == ReadStatus.TABULAR:
 					readstatus = ReadStatus.ERASE
