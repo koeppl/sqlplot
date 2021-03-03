@@ -311,6 +311,8 @@ def plot_coordinates(sqlbuffer, outfilename, coordinates, outfile, outfiletype, 
 			print('#index %d with parameter %s' % (gnuplot_line_index[outfilename], entryname[0] if len(entryname) == 1 else str(entryname).replace(',',';')), file=outfile)
 			for coordinate in coordinates[entryname]:
 				print('%s\t%s' % (coordinate[0], coordinate[1]), file=outfile)
+			""" gnuplot needs two newlines for marking the values of the next entry """
+			print('', file=outfile)
 			print('', file=outfile)
 			gnuplot_line_index[outfilename] += 1
 			
@@ -319,7 +321,7 @@ def plot_coordinates(sqlbuffer, outfilename, coordinates, outfile, outfiletype, 
 			entryname = entrynames[entry_id]
 			index = gnuplot_line_index[outfilename] - len(entrynames) + entry_id
 			title = entryname[0] if len(entryname) == 1 else str(entryname).replace(',',';')
-			print('# \'%s\' index %d title "%s" with linespoints ls %d, \\' % (outfilename, index, title, index), file=outfile)
+			print('# \'%s\' index %d title "%s" with linespoints ls %d, \\' % (outfilename, index, title, index+1), file=outfile)
 		print('# ', file=outfile)
 		print('\n', file=outfile)
 
