@@ -190,6 +190,7 @@ class Filetype(IntEnum):
 	JS = auto()
 	CSV = auto()
 	GNUPLOT = auto()
+	UNKNOWN = auto()
 	def comment(self):
 		if(self == Filetype.CSV):
 			return '##'
@@ -208,8 +209,9 @@ class Filetype(IntEnum):
 			return Filetype.JS
 		if(str == 'py'):
 			return Filetype.PYTHON
-		if(str == 'plt'):
+		if(str == 'plt' or str == 'gnuplot'):
 			return Filetype.GNUPLOT
+		return Filetype.UNKNOWN
 
 databasename=':memory:'
 loging_level_parameter='warning'
@@ -242,14 +244,17 @@ sqlbuffer = ''
 
 
 assert os.access(filename, os.R_OK), 'cannot read file %s' % filename
-if filename.endswith('.py'):
-	filetype = Filetype.PYTHON
-elif filename.endswith('.plt'):
-	filetype = Filetype.GNUPLOT
-elif filename.endswith('.js'):
-	filetype = Filetype.JS
-elif filename.endswith('.csv'):
-	filetype = Filetype.CSV
+filetype = Filetype.fromString(os.path.splitext(filename)[1][1:])
+filetype == Filetype.UNKNOWN and die("unknown file type of file %s" % filename)
+
+# if filename.endswith('.py'):
+# 	filetype = Filetype.PYTHON
+# elif filename.endswith('.plt'):
+# 	filetype = Filetype.GNUPLOT
+# elif filename.endswith('.js'):
+# 	filetype = Filetype.JS
+# elif filename.endswith('.csv'):
+# 	filetype = Filetype.CSV
 
 
 conn = sqlite3.connect(databasename)
@@ -258,6 +263,7 @@ if logging_level <= logging.DEBUG:
 	conn.set_trace_callback(print)
 conn.row_factory = sqlite3.Row
 conn.create_function("log", 2, lambda base,x: math.log(x, base))
+conn.create_function("basename", 1, lambda filepath: os.path.basename(filepath))
 cursor = conn.cursor()
 
 
