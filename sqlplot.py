@@ -262,6 +262,7 @@ if logging_level <= logging.DEBUG:
 	sqlite3.enable_callback_tracebacks(True)
 	conn.set_trace_callback(print)
 conn.row_factory = sqlite3.Row
+conn.create_function("pow", 2, lambda base,exp: math.pow(base, exp))
 conn.create_function("log", 2, lambda base,x: math.log(x, base))
 conn.create_function("basename", 1, lambda filepath: os.path.basename(filepath))
 cursor = conn.cursor()
