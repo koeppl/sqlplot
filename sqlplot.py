@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 
 
-
 import sqlite3
 import math
 import pprint
 import logging
 
+import typing as t
 
 
 import sys, getopt
@@ -23,13 +23,13 @@ class sqltype(IntEnum):
 	INTEGER = auto()
 	REAL = auto()
 	TEXT = auto()
-	def __str__(self):
+	def __str__(self) -> str:
 		return self.name
 
 def merge_sqltypes(obja, objb):
 	return max(obja, objb)
 
-def make_sqltype(obj):
+def make_sqltype(obj: t.Any) -> sqltype:
 	try:
 		int(obj)
 		return sqltype.INTEGER
@@ -42,12 +42,12 @@ def make_sqltype(obj):
 		pass
 	return sqltype.TEXT
 
-def split_keyvalueline(line):
+def split_keyvalueline(line: str) -> t.Mapping[str,str]:
 	""" read a line of 'key=value' pairs separated by whitespace(s) into a dict """
 	attrs=dict()
 	while line.find('=') != -1:
 		key = line[:line.find('=')]
-		valuematch = re.match('^\S+', line[line.find('=')+1:])
+		valuematch = re.match(r'^\S+', line[line.find('=')+1:])
 		assert valuematch, 'invalid key/value line: %s' % line
 		value = valuematch.group(0)
 		line=line[len(key)+len(value)+1:]
@@ -56,12 +56,35 @@ def split_keyvalueline(line):
 		attrs[key] = value
 	return attrs
 
-def split_resultline(line):
+def split_resultline(line: str) -> t.Mapping[str,str]:
 	""" read a RESULT line and put the keyvalue pairs into a dict """
 	return split_keyvalueline(line[len('RESULT '):].strip())
 
+def create_json_table(tablename: str, tablefilename: str):
+	import json
+	with open(tablefilename,'r') as tablefile:
+		json_data = json.loads(tablefile.read())
+	keys = dict()
+	for entry in json_data:
+		for key in entry.keys():
+			if not key in keys:
+				keys[key] = make_sqltype(key)
+			else:
+				keys[key] = merge_sqltypes(make_sqltype(key), keys[key])
 
-def create_table(tablename, tablefilename):
+	columns=[]
+	for key in keys:
+		columns.append('"%s" %s' % (key, str(keys[key])))
+	sqlexecute('CREATE TABLE "%s" (%s);' % (tablename, ', '.join(columns)))
+
+	for entry in json_data:
+		sqlexecute('INSERT INTO "%s" (%s) VALUES (%s);' % (tablename
+			, ', '.join(map(lambda key : '"' + str(key) + '"' , entry.keys()))
+			, ', '.join(map(lambda value : '\'' + str(value) + '\'', entry.values()))))
+	conn.commit()
+
+
+def create_table(tablename: str, tablefilename: str):
 	""" read the types of the used keys """
 	keys = dict()
 	with open(tablefilename,'r') as tablefile:
@@ -86,10 +109,6 @@ def create_table(tablename, tablefilename):
 				sqlexecute('INSERT INTO "%s" (%s) VALUES (%s);' % (tablename
 					, ', '.join(map(lambda key : '"' + key + '"' , attrs.keys()))
 					, ', '.join(map(lambda value : '\'' + value + '\'', attrs.values()))))
-				# 	if value:
-				# for kv in re.split('\s+', tableLine[len('RESULT '):].strip()):
-				# 	assert len(kv.split('=')) == 2, 'invalid key-value in tableLine ' + tableLine
-					# [key,value] = kv.split('=')
 		conn.commit()
 
 
@@ -110,17 +129,17 @@ keyword_to_status = {
 		"DEFINE"     : ReadStatus.MACRO
 		}
 
-def apply_macros(sqlbuffer):
-	match = re.search('\\$(\w+)', sqlbuffer)
+def apply_macros(sqlbuffer: str) -> str:
+	match = re.search(r'\\$(\w+)', sqlbuffer)
 	while match:
 		macroname = match.group(1)
 		assert macroname in macros, 'macro not defined: "%s". used in the sql expression: %s' % (macroname, sqlbuffer)
 		sqlbuffer = macros[macroname].apply(sqlbuffer)
-		match = re.search('\\$(\w+)', sqlbuffer)
+		match = re.search(r'\\$(\w+)', sqlbuffer)
 	return sqlbuffer
 
 
-def multiplot(sqlbuffer, multiplot_columns):
+def multiplot(sqlbuffer : str, multiplot_columns : t.List[str]) -> t.Mapping[str, t.List[t.Tuple[str,str]]]:
 	""" reads a MULTIPLOT statement and returns a dictionary mapping a MULTIPLOT instance to a list of coordinates """
 	sqlbuffer = apply_macros(sqlbuffer)
 	logging.info("macros-expanded SQL : " + sqlbuffer);
@@ -160,6 +179,38 @@ def multiplot(sqlbuffer, multiplot_columns):
 	return coordinates
 
 
+class Filetype(IntEnum):
+	TEX = auto()
+	PYTHON = auto()
+	JS = auto()
+	CSV = auto()
+	GNUPLOT = auto()
+	UNKNOWN = auto()
+
+	def comment(self):
+		if(self == Filetype.CSV):
+			return '##'
+		if(self == Filetype.PYTHON or self == Filetype.GNUPLOT):
+			return '##'
+		if(self == Filetype.JS):
+			return '///'
+		else:
+			return '%%'
+
+	@staticmethod
+	def fromString(text: str) -> "Filetype":
+		if(text == 'csv'):
+			return Filetype.CSV
+		if(text == 'tex'):
+			return Filetype.TEX
+		if(text == 'csv'):
+			return Filetype.JS
+		if(text == 'py'):
+			return Filetype.PYTHON
+		if(text == 'plt' or text == 'gnuplot'):
+			return Filetype.GNUPLOT
+		return Filetype.UNKNOWN
+
 
 
 ## MAIN
@@ -184,91 +235,9 @@ except IOError:
 	print('file pgf_color_entries.txt does not exist -> will create it.', file=sys.stderr)
 
 
-class Filetype(IntEnum):
-	TEX = auto()
-	PYTHON = auto()
-	JS = auto()
-	CSV = auto()
-	GNUPLOT = auto()
-	UNKNOWN = auto()
-	def comment(self):
-		if(self == Filetype.CSV):
-			return '##'
-		if(self == Filetype.PYTHON or self == Filetype.GNUPLOT):
-			return '##'
-		if(self == Filetype.JS):
-			return '///'
-		else:
-			return '%%'
-	def fromString(str):
-		if(str == 'csv'):
-			return Filetype.CSV
-		if(str == 'tex'):
-			return Filetype.TEX
-		if(str == 'csv'):
-			return Filetype.JS
-		if(str == 'py'):
-			return Filetype.PYTHON
-		if(str == 'plt' or str == 'gnuplot'):
-			return Filetype.GNUPLOT
-		return Filetype.UNKNOWN
-
-databasename=':memory:'
-loging_level_parameter='warning'
-try:
-	opts, args = getopt.getopt(sys.argv[1:],"D:l::",["database=","log="])
-except getopt.GetoptError:
-	print (sys.argv[0] + ' -D <databasename> -l <logginglevel> <infile>')
-	sys.exit(2)
-for opt, arg in opts:
-	if opt in ('-D', '--database'):
-		databasename = arg
-	if opt in ('-l', '--log'):
-		loging_level_parameter = arg
-	# else:
-	# 	filename = arg
-
-logging_level = getattr(logging, loging_level_parameter.upper(), None)
-if not isinstance(logging_level, int):
-    raise ValueError('Invalid log level: %s' % loging_level_parameter)
-logging.basicConfig(level=logging_level)
 
 
-
-filename = args[0]
-filetype = Filetype.TEX
-readstatus = ReadStatus.NONE
-sqlbuffer = ''
-#filename = sys.argv[1]
-
-
-
-assert os.access(filename, os.R_OK), 'cannot read file %s' % filename
-filetype = Filetype.fromString(os.path.splitext(filename)[1][1:])
-filetype == Filetype.UNKNOWN and die("unknown file type of file %s" % filename)
-
-# if filename.endswith('.py'):
-# 	filetype = Filetype.PYTHON
-# elif filename.endswith('.plt'):
-# 	filetype = Filetype.GNUPLOT
-# elif filename.endswith('.js'):
-# 	filetype = Filetype.JS
-# elif filename.endswith('.csv'):
-# 	filetype = Filetype.CSV
-
-
-conn = sqlite3.connect(databasename)
-if logging_level <= logging.DEBUG:
-	sqlite3.enable_callback_tracebacks(True)
-	conn.set_trace_callback(print)
-conn.row_factory = sqlite3.Row
-conn.create_function("pow", 2, lambda base,exp: math.pow(base, exp))
-conn.create_function("log", 2, lambda base,x: math.log(x, base))
-conn.create_function("basename", 1, lambda filepath: os.path.basename(filepath))
-cursor = conn.cursor()
-
-
-def sqlexecute(sqlcommand):
+def sqlexecute(sqlcommand: str):
 	try:
 #		logging.info("SQL query: " + sqlbuffer);
 		cursor.execute(sqlcommand)
@@ -277,12 +246,18 @@ def sqlexecute(sqlcommand):
 		raise e
 
 class Macro:
-	def __init__(self, name, arguments, body):
+	name : str
+	arguments : t.List[str]
+	body : str
+
+	def __init__(self, name: str, arguments: t.List[str], body: str):
 		self.name = name
 		self.arguments = arguments
 		self.body = body
-	def apply(self, s):
-		regex = '\$' + self.name + '\s*\(([^)]+)\)'
+
+	def apply(self, s: str) -> str:
+		""" applies the macro with a given list of parameters """
+		regex = r'\$' + self.name + r'\s*\(([^)]+)\)'
 		match = re.search(regex, s)
 		while match:
 			parameters = match.group(1).split(',')
@@ -294,13 +269,14 @@ class Macro:
 			match = re.search(regex, s)
 		return s
 
-macros=dict()
+""" mapping names to macros """
+macros : t.Mapping[str, Macro] = dict()
 
 """ storing the last index of the written gnuplot data for each file """
 gnuplot_line_index = dict()
 
 """ writes the output of MULTIPLOT or SINGLEPLOT, where coordinates is a dict mapping an entryname to a list of coordinates """
-def plot_coordinates(sqlbuffer, outfilename, coordinates, outfile, outfiletype, previous_entries):
+def plot_coordinates(sqlbuffer: str, outfilename: t.Union[None, str], coordinates, outfile, outfiletype, previous_entries):
 	# entrynames = list(map(lambda x: tuple(x), coordinates.keys()))
 	entrynames = list(coordinates.keys())
 	entrynames.sort()
@@ -376,151 +352,213 @@ def print_tablentry(entry):
 		return "\\num{%s}" % entry
 	return entry
 
-with open(filename) as texfile:
-	for texLine in texfile.readlines():
-		if readstatus == ReadStatus.MACRO:
-			if texLine.startswith(filetype.comment()):
-				print(texLine, end='')
-				sqlbuffer+=' ' + texLine[len(filetype.comment()):].rstrip()
-				continue
-			readstatus = ReadStatus.NONE
-			match = re.match('\s*DEFINE\s+(\w+)\s*\(([^)]+)\)\s*(.*)', sqlbuffer)
-			assert match, "no valid MACRO: " + sqlbuffer
-			name = match.group(1)
-			arguments = list(map(lambda x: x.strip(), match.group(2).split(',')))
-			body = match.group(3)
-			for argument in arguments:
-				assert body.find('$' + argument) != -1, "argument %s not found in body: %s" % (argument, body)
-			macros[name] = Macro(name, arguments, body)
 
-		if readstatus in [ReadStatus.MULTIPLOT, ReadStatus.TABULAR, ReadStatus.SINGLEPLOT, ReadStatus.MATRIX]:
-			if texLine.startswith(filetype.comment()):
-				print(texLine, end='')
-				if texLine.startswith('%s CONFIG' % filetype.comment()):
-					config_args = split_keyvalueline(texLine[len('%s CONFIG' % filetype.comment()):])
-				else:
+if __name__ == "__main__":
+	databasename=':memory:'
+	loging_level_parameter='warning'
+	filename=''
+	filetype = Filetype.TEX
+
+	try:
+		opts, args = getopt.getopt(sys.argv[1:],"D:l:i:",["database=","log="])
+	except getopt.GetoptError:
+		print (sys.argv[0] + ' -D <databasename> -l <logginglevel> -i <infile>')
+		sys.exit(2)
+	for opt, arg in opts:
+		if opt in ('-D', '--database'):
+			databasename = arg
+		elif opt in ('-l', '--log'):
+			loging_level_parameter = arg
+		elif opt in ('-i', '--infile'):
+			filename = arg
+		else:
+			assert False, "unhandled option: %s" % arg
+	if filename == '':
+		assert False, "need at least the inputfile (-i) as parameter"
+
+	logging_level = getattr(logging, loging_level_parameter.upper(), None)
+	if not isinstance(logging_level, int):
+		raise ValueError('Invalid log level: %s' % loging_level_parameter)
+	logging.basicConfig(level=logging_level)
+
+	readstatus = ReadStatus.NONE
+	sqlbuffer = ''
+
+	assert os.access(filename, os.R_OK), 'cannot read file %s' % filename
+	filetype = Filetype.fromString(os.path.splitext(filename)[1][1:])
+	if filetype == Filetype.UNKNOWN:
+		die("unknown file type of file %s" % filename)
+
+	conn = sqlite3.connect(databasename)
+	if logging_level <= logging.DEBUG:
+		sqlite3.enable_callback_tracebacks(True)
+		conn.set_trace_callback(print)
+	conn.row_factory = sqlite3.Row
+	conn.create_function("pow", 2, lambda base,exp: math.pow(base, exp))
+	conn.create_function("log", 2, lambda base,x: math.log(x, base))
+	conn.create_function("basename", 1, lambda filepath: os.path.basename(filepath))
+	cursor = conn.cursor()
+
+
+	config_args : t.Mapping[str,str] = dict()
+	outfile = sys.stdout
+	outfilename = None
+	outfiletype = Filetype.TEX
+	previous_entries = -1
+
+
+	with open(filename) as texfile:
+		for texLine in texfile.readlines():
+			if readstatus == ReadStatus.MACRO:
+				if texLine.startswith(filetype.comment()):
+					print(texLine, end='')
 					sqlbuffer+=' ' + texLine[len(filetype.comment()):].rstrip()
-				continue
-			else:
-				if readstatus in [ReadStatus.MULTIPLOT, ReadStatus.SINGLEPLOT]:
-					outfiletype = filetype
-					""" if mode=a we use the previous_entries for the cycle list """
-					if not 'mode' in config_args or config_args['mode'].find('a') == -1: 
-						previous_entries = 0
-					if 'type' in config_args:
-						outfiletype = Filetype.fromString(config_args['type'])
-					if 'file' in config_args:
-						if outfiletype == Filetype.GNUPLOT:
-							assert ('mode' in config_args and config_args['mode'].find('a') != -1) or config_args['file'] not in gnuplot_line_index, 'overwriting a .dat file created within this execution without append mode is prohibited'
-						outfile = open(config_args['file'], 'w' if not 'mode' in config_args else config_args['mode'])
-						if outfiletype == Filetype.TEX: 
-							print('\\input{%s}' % config_args['file'])
-						elif outfiletype == Filetype.PYTHON:
-							print('# read comments in file %s for the plot command' % config_args['file'])
-							
-					else:
-						outfile = sys.stdout
-						assert outfiletype != Filetype.GNUPLOT, "need CONFIG file={outfile} parameter to know where to write the data"
-					try:
-						previous_entries
-					except NameError:
-						die('mode is set to append, but there is no previous content!')
-						
-
-				if readstatus == ReadStatus.TABULAR:
-					readstatus = ReadStatus.ERASE
-					sqlbuffer = apply_macros(sqlbuffer[sqlbuffer.find('TABULAR')+len('TABULAR'):])
-					sqlexecute(sqlbuffer + ';')
-
-					if 'file' in config_args:
-						outfile = open(config_args['file'], 'w' if not 'mode' in config_args else config_args['mode'])
-						print('\\input{%s}' % config_args['file'])
-					else:
-						outfile = sys.stdout
-
-					for row in cursor.fetchall():
-						print(" & ".join(map(print_tablentry, row)) + ' \\\\', file=outfile)
-				elif readstatus == ReadStatus.SINGLEPLOT:
-					readstatus = ReadStatus.ERASE
-					match = re.match('\s*SINGLEPLOT\(([^)]+)\)', sqlbuffer)
-					assert match, "no singleplot argument given: " + sqlbuffer
-					singleplot_name = match.group(1)
-					sqlbuffer = sqlbuffer[match.span()[1]:] #remove 'MULTIPLOT(...) directive
-					sqlexecute(sqlbuffer + ';')
-					rows = cursor.fetchall()
-					coordinates=dict()
-					coordinates[(singleplot_name,)] = list(map(lambda row: (row['x'], row['y']), rows))
-					previous_entries = plot_coordinates(sqlbuffer, config_args['file'] if 'file' in config_args else None, coordinates, outfile, outfiletype, previous_entries)
-				elif readstatus == ReadStatus.MATRIX:
-					readstatus = ReadStatus.ERASE
-					sqlbuffer = apply_macros(sqlbuffer[sqlbuffer.find('MATRIX')+len('MATRIX'):])
-					sqlexecute(sqlbuffer + ';')
-
-					if 'file' in config_args:
-						outfile = open(config_args['file'], 'w' if not 'mode' in config_args else config_args['mode'])
-						print('\\input{%s}' % config_args['file'])
-					else:
-						outfile = sys.stdout
-					
-					column_names=set()
-					row_names=set()
-					matrix=dict()
-					for row in cursor.fetchall():
-						print(row)
-						column_names.add(row['x'])
-						row_names.add(row['y'])
-						matrix[(row['x'], row['y'])] = row['val']
-					print(" & ".join(map(str, column_names)) + ' \\\\', file=outfile)
-					for row in row_names:
-						print(row + " & " + " & ".join(map(print_tablentry, map(lambda x: matrix[(x, row)], column_names))) + ' \\\\', file=outfile)
-				else:
-					assert readstatus == ReadStatus.MULTIPLOT
-					readstatus = ReadStatus.ERASE
-					match = re.match('\s*MULTIPLOT\(([^)]+)\)', sqlbuffer)
-					assert match, "no multiplot argument given: " + sqlbuffer
-					multiplot_columns = match.group(1)
-					sqlbuffer_rest = sqlbuffer[match.span()[1]:] #remove 'MULTIPLOT(...) directive
-					coordinates = multiplot(sqlbuffer_rest, list(map(lambda col: col.strip(), multiplot_columns.split(','))))
-					previous_entries = plot_coordinates(sqlbuffer, config_args['file'] if 'file' in config_args else None, coordinates, outfile, outfiletype, previous_entries)
-				#cleanup
-				if 'file' in config_args:
-					outfile.close()
-				config_args=dict()
-
-		if readstatus == ReadStatus.ERASE:
-			if len(texLine.strip()) == 0 or texLine.startswith(filetype.comment()):
+					continue
 				readstatus = ReadStatus.NONE
-			else:
-				continue
+				match = re.match(r'\s*DEFINE\s+(\w+)\s*\(([^)]+)\)\s*(.*)', sqlbuffer)
+				assert match, "no valid MACRO: " + sqlbuffer
+				name = match.group(1)
+				arguments = list(map(lambda x: x.strip(), match.group(2).split(',')))
+				body = match.group(3)
+				for argument in arguments:
+					assert body.find('$' + argument) != -1, "argument %s not found in body: %s" % (argument, body)
+				macros[name] = Macro(name, arguments, body)
 
-		#! check for a multiline command stored in keyword_to_status
-		for key in keyword_to_status:
-			if texLine.startswith('%s %s' % (filetype.comment(), key) ):
-				config_args=dict()
-				sqlbuffer = texLine[len(filetype.comment()):].rstrip()
-				readstatus = keyword_to_status[key]
-				break
+			if readstatus in [ReadStatus.MULTIPLOT, ReadStatus.TABULAR, ReadStatus.SINGLEPLOT, ReadStatus.MATRIX]:
+				if texLine.startswith(filetype.comment()):
+					print(texLine, end='')
+					if texLine.startswith('%s CONFIG' % filetype.comment()):
+						config_args = split_keyvalueline(texLine[len('%s CONFIG' % filetype.comment()):])
+					else:
+						sqlbuffer+=' ' + texLine[len(filetype.comment()):].rstrip()
+					continue
+				else:
+					if readstatus in [ReadStatus.MULTIPLOT, ReadStatus.SINGLEPLOT]:
+						outfiletype = filetype
+						""" if mode=a we use the previous_entries for the cycle list """
+						if not 'mode' in config_args or config_args['mode'].find('a') == -1: 
+							previous_entries = 0
+						if 'type' in config_args:
+							outfiletype = Filetype.fromString(config_args['type'])
+						if 'file' in config_args:
+							if outfiletype == Filetype.GNUPLOT:
+								assert ('mode' in config_args and config_args['mode'].find('a') != -1) or config_args['file'] not in gnuplot_line_index, 'overwriting a .dat file created within this execution without append mode is prohibited'
+							outfile = open(config_args['file'], 'w' if not 'mode' in config_args else config_args['mode'])
+							if outfiletype == Filetype.TEX: 
+								print('\\input{%s}' % config_args['file'])
+							elif outfiletype == Filetype.PYTHON:
+								print('# read comments in file %s for the plot command' % config_args['file'])
+								
+						else:
+							outfile = sys.stdout
+							assert outfiletype != Filetype.GNUPLOT, "need CONFIG file={outfile} parameter to know where to write the data"
+						# try:
+						# 	previous_entries
+						# except NameError:
+						if previous_entries == -1:
+							die('mode is set to append, but there is no previous content!')
+							
 
-		if texLine.startswith('%s UNDEF ' % filetype.comment()):
-			sqlbuffer = texLine[len(filetype.comment()):].strip()
-			match = re.match('UNDEF\s+(\w+)\s*', sqlbuffer)
-			assert match, 'invalid UNDEF syntax : ' + sqlbuffer
-			name = match.group(1).strip()
-			assert name in macros, 'cannot UNDEF undefined macro: ' + name
-			del macros[name]
+					if readstatus == ReadStatus.TABULAR:
+						readstatus = ReadStatus.ERASE
+						sqlbuffer = apply_macros(sqlbuffer[sqlbuffer.find('TABULAR')+len('TABULAR'):])
+						sqlexecute(sqlbuffer + ';')
 
-		#! read a log file with '^RESULT .*' statements into a sql table
-		if texLine.startswith('%s IMPORT-DATA ' % filetype.comment()):
-			match = re.match('%s IMPORT-DATA ([^ ]+) (.+)' % filetype.comment(), texLine)
-			assert match, 'invalid texLine ' + texLine
-			create_table(match.group(1), match.group(2))
+						if 'file' in config_args:
+							outfile = open(config_args['file'], 'w' if not 'mode' in config_args else config_args['mode'])
+							print('\\input{%s}' % config_args['file'])
+						else:
+							outfile = sys.stdout
 
-		print(texLine, end='')
-			
-conn.close()
+						for row in cursor.fetchall():
+							print(" & ".join(map(print_tablentry, row)) + ' \\\\', file=outfile)
+					elif readstatus == ReadStatus.SINGLEPLOT:
+						readstatus = ReadStatus.ERASE
+						match = re.match(r'\s*SINGLEPLOT\(([^)]+)\)', sqlbuffer)
+						assert match, "no singleplot argument given: " + sqlbuffer
+						singleplot_name = match.group(1)
+						sqlbuffer = sqlbuffer[match.span()[1]:] #remove 'MULTIPLOT(...) directive
+						sqlexecute(sqlbuffer + ';')
+						rows = cursor.fetchall()
+						coordinates=dict()
+						coordinates[(singleplot_name,)] = list(map(lambda row: (row['x'], row['y']), rows))
+						previous_entries = plot_coordinates(sqlbuffer, config_args['file'] if 'file' in config_args else None, coordinates, outfile, outfiletype, previous_entries)
+					elif readstatus == ReadStatus.MATRIX:
+						readstatus = ReadStatus.ERASE
+						sqlbuffer = apply_macros(sqlbuffer[sqlbuffer.find('MATRIX')+len('MATRIX'):])
+						sqlexecute(sqlbuffer + ';')
 
-if filetype == Filetype.TEX:
-	with open('pgf_color_entries.txt','w') as txtfile:
-		print('# this file is automatically created by sqlplot.py to ensure the same legend symbol for each entry in all plots generated by sqlplot.py', file=txtfile)
-		for key in color_entries:
-			txtfile.write('%s\t%d\n' % (key, color_entries[key]))
+						if 'file' in config_args:
+							outfile = open(config_args['file'], 'w' if not 'mode' in config_args else config_args['mode'])
+							print('\\input{%s}' % config_args['file'])
+						else:
+							outfile = sys.stdout
+						
+						column_names=set()
+						row_names=set()
+						matrix=dict()
+						for row in cursor.fetchall():
+							print(row)
+							column_names.add(row['x'])
+							row_names.add(row['y'])
+							matrix[(row['x'], row['y'])] = row['val']
+						print(" & ".join(map(str, column_names)) + ' \\\\', file=outfile)
+						for row in row_names:
+							print(row + " & " + " & ".join(map(print_tablentry, map(lambda x: matrix[(x, row)], column_names))) + ' \\\\', file=outfile)
+					else:
+						assert readstatus == ReadStatus.MULTIPLOT
+						readstatus = ReadStatus.ERASE
+						match = re.match(r'\s*MULTIPLOT\(([^)]+)\)', sqlbuffer)
+						assert match, "no multiplot argument given: " + sqlbuffer
+						multiplot_columns = match.group(1)
+						sqlbuffer_rest = sqlbuffer[match.span()[1]:] #remove 'MULTIPLOT(...) directive
+						coordinates = multiplot(sqlbuffer_rest, list(map(lambda col: col.strip(), multiplot_columns.split(','))))
+						previous_entries = plot_coordinates(sqlbuffer, config_args['file'] if 'file' in config_args else None, coordinates, outfile, outfiletype, previous_entries)
+					#cleanup
+					if 'file' in config_args:
+						outfile.close()
+					config_args=dict()
+
+			if readstatus == ReadStatus.ERASE:
+				if len(texLine.strip()) == 0 or texLine.startswith(filetype.comment()):
+					readstatus = ReadStatus.NONE
+				else:
+					continue
+
+			#! check for a multiline command stored in keyword_to_status
+			for key in keyword_to_status:
+				if texLine.startswith('%s %s' % (filetype.comment(), key) ):
+					config_args=dict()
+					sqlbuffer = texLine[len(filetype.comment()):].rstrip()
+					readstatus = keyword_to_status[key]
+					break
+
+			if texLine.startswith('%s UNDEF ' % filetype.comment()):
+				sqlbuffer = texLine[len(filetype.comment()):].strip()
+				match = re.match(r'UNDEF\s+(\w+)\s*', sqlbuffer)
+				assert match, 'invalid UNDEF syntax : ' + sqlbuffer
+				name = match.group(1).strip()
+				assert name in macros, 'cannot UNDEF undefined macro: ' + name
+				del macros[name]
+
+			#! read a log file with '^RESULT .*' statements into a sql table
+			if texLine.startswith('%s IMPORT-DATA ' % filetype.comment()):
+				match = re.match('%s IMPORT-DATA ([^ ]+) (.+)' % filetype.comment(), texLine)
+				assert match, 'invalid texLine ' + texLine
+				create_table(match.group(1), match.group(2))
+
+			#! read a list of JSON log statements into a sql table
+			if texLine.startswith('%s IMPORT-JSON-DATA ' % filetype.comment()):
+				match = re.match('%s IMPORT-JSON-DATA ([^ ]+) (.+)' % filetype.comment(), texLine)
+				assert match, 'invalid texLine ' + texLine
+				create_json_table(match.group(1), match.group(2))
+
+			print(texLine, end='')
+				
+	conn.close()
+
+	if filetype == Filetype.TEX:
+		with open('pgf_color_entries.txt','w') as txtfile:
+			print('# this file is automatically created by sqlplot.py to ensure the same legend symbol for each entry in all plots generated by sqlplot.py', file=txtfile)
+			for key in color_entries:
+				txtfile.write('%s\t%d\n' % (key, color_entries[key]))
