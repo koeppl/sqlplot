@@ -266,17 +266,12 @@ class Macro:
 			match = re.search(regex, s)
 		return s
 
-""" mapping names to macros """
-macros : t.Mapping[str, Macro] = dict()
-
-""" storing the last index of the written gnuplot data for each file """
-gnuplot_line_index : t.Mapping[str, int] = dict()
 
 """ writes the output of MULTIPLOT or SINGLEPLOT, where coordinates is a dict mapping an entryname to a list of coordinates. Adds to `previous_entries` the number of written entries """
 def plot_coordinates(sqlbuffer: str, 
-		outfilename: t.Union[None, str], 
+		outfilename: str, 
 		coordinates: t.Mapping[str, t.List[t.Tuple[str,str]]], 
-		outfile: File, 
+		outfile: t.IO, 
 		outfiletype: Filetype, 
 		previous_entries: int) -> int:
 	entrynames = list(coordinates.keys())
@@ -331,7 +326,7 @@ def plot_coordinates(sqlbuffer: str,
 		jsonoutput['result'] = j
 		json.dump(jsonoutput, outfile, indent=1)
 	else: # default: latex
-		if outfilename != None:
+		if outfilename != 'stdout':
 			print('% ' + sqlbuffer, file=outfile)
 
 		for entry_id in range(len(entrynames)):
@@ -357,6 +352,7 @@ def print_tablentry(entry: t.Any) -> str:
 
 
 if __name__ == "__main__":
+
 	databasename=':memory:'
 	loging_level_parameter='warning'
 	filename=''
@@ -409,6 +405,11 @@ if __name__ == "__main__":
 	outfiletype = Filetype.TEX
 	previous_entries = -1
 
+	""" mapping names to macros """
+	macros : t.Mapping[str, Macro] = dict()
+
+	""" storing the last index of the written gnuplot data for each file """
+	gnuplot_line_index : t.Dict[str, int] = dict()
 
 	with open(filename) as texfile:
 		for texLine in texfile.readlines():
@@ -485,7 +486,7 @@ if __name__ == "__main__":
 						rows = cursor.fetchall()
 						coordinates=dict()
 						coordinates[(singleplot_name,)] = list(map(lambda row: (row['x'], row['y']), rows))
-						previous_entries = plot_coordinates(sqlbuffer, config_args['file'] if 'file' in config_args else None, coordinates, outfile, outfiletype, previous_entries)
+						previous_entries = plot_coordinates(sqlbuffer, config_args['file'] if 'file' in config_args else 'stdout', coordinates, outfile, outfiletype, previous_entries)
 					elif readstatus == ReadStatus.MATRIX:
 						readstatus = ReadStatus.ERASE
 						sqlbuffer = apply_macros(sqlbuffer[sqlbuffer.find('MATRIX')+len('MATRIX'):])
@@ -516,7 +517,7 @@ if __name__ == "__main__":
 						multiplot_columns = match.group(1)
 						sqlbuffer_rest = sqlbuffer[match.span()[1]:] #remove 'MULTIPLOT(...) directive
 						coordinates = multiplot(sqlbuffer_rest, list(map(lambda col: col.strip(), multiplot_columns.split(','))))
-						previous_entries = plot_coordinates(sqlbuffer, config_args['file'] if 'file' in config_args else None, coordinates, outfile, outfiletype, previous_entries)
+						previous_entries = plot_coordinates(sqlbuffer, config_args['file'] if 'file' in config_args else 'stdout', coordinates, outfile, outfiletype, previous_entries)
 					#cleanup
 					if 'file' in config_args:
 						outfile.close()
