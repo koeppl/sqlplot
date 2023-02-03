@@ -1,0 +1,14 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "sqlplot"
+
+[packages]
+matplotlib = "*"
+plotly = "*"
+pandas = "*"
+
+[dev-packages]
+pyright = "*"
+
+

@@ -1,0 +1,9 @@
+name: check
+on: [push]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - run: pip install pipenv && pipenv lock && pipenv sync --dev
+      - run: pipenv run pyright

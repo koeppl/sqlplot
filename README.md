@@ -1,4 +1,5 @@
-# sqlplots
+# sqlplot
+![automatic test](https://github.com/koeppl/sqlplot/actions/workflows/check.yml/badge.svg)
 
 This is a python3 reimplementation of [https://github.com/bingmann/sqlplot-tools](sqlplot-tools).
 

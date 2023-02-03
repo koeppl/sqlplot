@@ -8,7 +8,7 @@ import argparse
 import codecs
 
 def unescaped_str(arg_str):
-    return codecs.decode(str(arg_str), 'unicode_escape')
+    return codecs.decode(arg_str, 'unicode_escape')
 
 parser = argparse.ArgumentParser(description='converts a CSV file into a RESULT file')
 parser.add_argument('-i', "--input", type=str, help="input CSV file", required=True)
