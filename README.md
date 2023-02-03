@@ -78,6 +78,7 @@ Undefines the macro `macro`.
 
 ## Program parameters
 
+- `-i <filename>` the input file name to parse (required argument)
 - `-l DEBUG` runs the program in debug level logging, issuing all SQL commands that are executed, also unpacking a `MULTIPLOT` command into multiple SQL commands
 - `-D databasefile` stores in-memory created database in a file in append mode, meaning that it adds tables in case that the file is an existing sqlite database, and assuming that this database does not already contain these tables.
 
