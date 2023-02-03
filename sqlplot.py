@@ -32,11 +32,16 @@ def make_sqltype(obj: t.Any) -> sqltype:
 		return sqltype.INTEGER
 	except ValueError:
 		pass
+	except TypeError:
+		pass
 	try: 
 		float(obj)
 		return sqltype.REAL
 	except ValueError:
 		pass
+	except TypeError:
+		pass
+	logging.debug(f"type of {obj} is TEXT")
 	return sqltype.TEXT
 
 def split_keyvalueline(line: str) -> t.Mapping[str,str]:
@@ -65,9 +70,9 @@ def create_json_table(tablename: str, tablefilename: str):
 	for entry in json_data:
 		for key in entry.keys():
 			if not key in keys:
-				keys[key] = make_sqltype(key)
+				keys[key] = make_sqltype(entry[key])
 			else:
-				keys[key] = merge_sqltypes(make_sqltype(key), keys[key])
+				keys[key] = merge_sqltypes(make_sqltype(entry[key]), keys[key])
 
 	columns=[]
 	for key in keys:
@@ -236,7 +241,7 @@ except IOError:
 
 def sqlexecute(sqlcommand: str):
 	try:
-#		logging.info("SQL query: " + sqlbuffer);
+		logging.debug("SQL query: " + sqlbuffer);
 		cursor.execute(sqlcommand)
 	except sqlite3.Error as e:
 		print("Error while executing the SQL statement: ", sqlcommand, file=sys.stderr)
@@ -447,6 +452,8 @@ if __name__ == "__main__":
 						if 'file' in config_args:
 							if outfiletype == Filetype.GNUPLOT:
 								assert ('mode' in config_args and config_args['mode'].find('a') != -1) or config_args['file'] not in gnuplot_line_index, 'overwriting a .dat file created within this execution without append mode is prohibited'
+
+							os.makedirs(os.path.dirname(config_args['file']), exist_ok=True)
 							outfile = open(config_args['file'], 'w' if not 'mode' in config_args else config_args['mode'])
 							if outfiletype == Filetype.TEX: 
 								print('\\input{%s}' % config_args['file'])
