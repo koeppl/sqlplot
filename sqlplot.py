@@ -77,7 +77,7 @@ def create_json_table(tablename: str, tablefilename: str):
 	columns=[]
 	for key in keys:
 		columns.append('"%s" %s' % (key, str(keys[key])))
-	sqlexecute('CREATE TABLE "%s" (%s);' % (tablename, ', '.join(columns)))
+	sqlexecute('CREATE TABLE IF NOT EXISTS "%s" (%s);' % (tablename, ', '.join(columns)))
 
 	for entry in json_data:
 		sqlexecute('INSERT INTO "%s" (%s) VALUES (%s);' % (tablename
@@ -101,7 +101,7 @@ def create_table(tablename: str, tablefilename: str):
 	columns=[]
 	for key in keys:
 		columns.append('"%s" %s' % (key, str(keys[key])))
-	sqlexecute('CREATE TABLE "%s" (%s);' % (tablename, ', '.join(columns)))
+	sqlexecute('CREATE TABLE IF NOT EXISTS "%s" (%s);' % (tablename, ', '.join(columns)))
 
 	# read the values
 	with open(tablefilename, 'r') as tablefile:

@@ -42,7 +42,7 @@ The valid keys are:
 %% SINGLEPLOT(name) SQL-STATEMENT 
 ```
 Instead of a multiplot, we plot only a single dataset whose name string we set as a parameter of `SINGLELPLOT`.
-The rest is exacly as `MULTIPLOT` but a regular SQL command (i.e., without `MULTIPLOT` in the SQL body).
+The rest is exactly as `MULTIPLOT` but a regular SQL command (i.e., without `MULTIPLOT` in the SQL body).
 The idea of this command is to supplement a `MULTIPLOT` command from another table that may only contain the benchmarks of a single instance.
 
 ```
