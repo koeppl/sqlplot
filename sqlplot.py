@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+""" sqlplot """
+# pylint: disable=bad-indentation,line-too-long,invalid-name
+
+
 import sqlite3
 import math
 import pprint
@@ -77,6 +81,8 @@ def create_json_table(tablename: str, tablefilename: str):
 	columns=[]
 	for key in keys:
 		columns.append('"%s" %s' % (key, str(keys[key])))
+	if len(columns) == 0:
+		die('no data in the json file %s' % tablefilename)
 	sqlexecute('CREATE TABLE IF NOT EXISTS "%s" (%s);' % (tablename, ', '.join(columns)))
 
 	for entry in json_data:
@@ -88,7 +94,7 @@ def create_json_table(tablename: str, tablefilename: str):
 
 def create_table(tablename: str, tablefilename: str):
 	""" read the types of the used keys """
-	keys = dict()
+	keys = {}
 	with open(tablefilename,'r') as tablefile:
 		for tableLine in tablefile.readlines():
 			if tableLine.startswith('RESULT '):
@@ -101,6 +107,9 @@ def create_table(tablename: str, tablefilename: str):
 	columns=[]
 	for key in keys:
 		columns.append('"%s" %s' % (key, str(keys[key])))
+	if len(columns) == 0:
+		die('no RESULT rows in the file %s' % tablefilename)
+
 	sqlexecute('CREATE TABLE IF NOT EXISTS "%s" (%s);' % (tablename, ', '.join(columns)))
 
 	# read the values
